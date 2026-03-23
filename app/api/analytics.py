@@ -5,8 +5,8 @@ Analytics API - 数据分析接口
 """
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, desc, select
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -21,16 +21,16 @@ def success_response(data=None, message="success"):
     return {"code": 0, "message": message, "data": data}
 
 
-@router.get("/sales")
-def get_sales_stats(
+@router.get("/sales", operation_id="get_sales_stats")
+async def get_sales_stats(
     start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
     end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
     category_id: Optional[int] = Query(None, description="分类ID"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """销售统计"""
     query = (
-        db.query(
+        select(
             Product.id,
             Product.name,
             Product.category_id,
@@ -41,22 +41,24 @@ def get_sales_stats(
         .join(OrderItem, OrderItem.product_id == Product.id)
         .join(Order, Order.id == OrderItem.order_id)
         .join(Category, Category.id == Product.category_id, isouter=True)
-        .filter(Order.status.in_(["paid", "shipped", "completed"]))
+        .where(Order.status.in_(["paid", "shipped", "completed"]))
     )
 
     if start_date:
-        query = query.filter(Order.created_at >= start_date)
+        query = query.where(Order.created_at >= start_date)
     if end_date:
-        query = query.filter(Order.created_at <= end_date)
+        query = query.where(Order.created_at <= end_date)
     if category_id:
-        query = query.filter(Product.category_id == category_id)
+        query = query.where(Product.category_id == category_id)
 
-    results = (
+    query = (
         query.group_by(Product.id, Product.name, Product.category_id, Category.name)
         .order_by(desc("total_revenue"))
         .limit(50)
-        .all()
     )
+    
+    result = await db.execute(query)
+    results = result.all()
 
     stats = {
         "total_orders": 0,
@@ -65,17 +67,15 @@ def get_sales_stats(
         "top_products": [],
     }
 
-    order_count_query = db.query(func.count(Order.id))
+    order_count_query = select(func.count(Order.id))
     if start_date:
-        order_count_query = order_count_query.filter(Order.created_at >= start_date)
+        order_count_query = order_count_query.where(Order.created_at >= start_date)
     if end_date:
-        order_count_query = order_count_query.filter(Order.created_at <= end_date)
-    stats["total_orders"] = (
-        order_count_query.filter(
-            Order.status.in_(["paid", "shipped", "completed"])
-        ).scalar()
-        or 0
-    )
+        order_count_query = order_count_query.where(Order.created_at <= end_date)
+    order_count_query = order_count_query.where(Order.status.in_(["paid", "shipped", "completed"]))
+    
+    order_count_result = await db.execute(order_count_query)
+    stats["total_orders"] = order_count_result.scalar() or 0
 
     for r in results:
         stats["total_revenue"] += float(r.total_revenue or 0)
@@ -94,34 +94,34 @@ def get_sales_stats(
     return success_response(stats)
 
 
-@router.get("/low-stock")
-def get_low_stock_alert(
+@router.get("/low-stock", operation_id="get_low_stock_alert")
+async def get_low_stock_alert(
     threshold: int = Query(10, description="库存预警阈值"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """低库存预警"""
-    products = (
-        db.query(Product)
-        .filter(Product.stock > 0, Product.stock <= threshold, Product.status == 1)
+    query = (
+        select(Product)
+        .where(Product.stock > 0, Product.stock <= threshold, Product.status == 1)
         .order_by(Product.stock)
-        .all()
     )
+    result = await db.execute(query)
+    products = result.scalars().all()
 
-    result = []
+    result_list = []
     for p in products:
-        category_name = (
-            db.query(Category.name).filter(Category.id == p.category_id).scalar()
-        )
+        cat_result = await db.execute(select(Category.name).where(Category.id == p.category_id))
+        category_name = cat_result.scalar()
 
-        active_reserves = (
-            db.query(func.sum(OrderItem.quantity))
+        active_reserves_query = (
+            select(func.sum(OrderItem.quantity))
             .join(Order, Order.id == OrderItem.order_id)
-            .filter(OrderItem.product_id == p.id, Order.status == "pending")
-            .scalar()
-            or 0
+            .where(OrderItem.product_id == p.id, Order.status == "pending")
         )
+        active_reserves_result = await db.execute(active_reserves_query)
+        active_reserves = active_reserves_result.scalar() or 0
 
-        result.append(
+        result_list.append(
             {
                 "product_id": p.id,
                 "sku": p.sku,
@@ -135,18 +135,18 @@ def get_low_stock_alert(
             }
         )
 
-    return success_response({"count": len(result), "products": result})
+    return success_response({"count": len(result_list), "products": result_list})
 
 
-@router.get("/recommend")
-def get_recommendations(
+@router.get("/recommend", operation_id="get_recommendations")
+async def get_recommendations(
     category_id: Optional[int] = Query(None, description="指定分类"),
     limit: int = Query(10, ge=1, le=50, description="返回数量"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """个性化推荐（基于销量和库存）"""
     query = (
-        db.query(
+        select(
             Product.id,
             Product.name,
             Product.price,
@@ -157,13 +157,13 @@ def get_recommendations(
         )
         .outerjoin(OrderItem, OrderItem.product_id == Product.id)
         .outerjoin(Category, Category.id == Product.category_id)
-        .filter(Product.status == 1, Product.stock > 0)
+        .where(Product.status == 1, Product.stock > 0)
     )
 
     if category_id:
-        query = query.filter(Product.category_id == category_id)
+        query = query.where(Product.category_id == category_id)
 
-    products = (
+    query = (
         query.group_by(
             Product.id,
             Product.name,
@@ -174,8 +174,10 @@ def get_recommendations(
         )
         .order_by(desc("sales_count"), desc(Product.stock))
         .limit(limit)
-        .all()
     )
+    
+    result = await db.execute(query)
+    products = result.all()
 
     recommendations = []
     for p in products:
@@ -195,11 +197,11 @@ def get_recommendations(
     return success_response(recommendations)
 
 
-@router.get("/category-stats")
-def get_category_stats(db: Session = Depends(get_db)):
-    """各分类统计"""
-    categories = (
-        db.query(
+@router.get("/category-stats", operation_id="get_category_stats")
+async def get_category_stats(db: AsyncSession = Depends(get_db)):
+    """各分类统计，包含商品数、销量、收入"""
+    query = (
+        select(
             Category.id,
             Category.name,
             func.count(Product.id).label("product_count"),
@@ -209,10 +211,12 @@ def get_category_stats(db: Session = Depends(get_db)):
         .outerjoin(Product, Product.category_id == Category.id)
         .outerjoin(OrderItem, OrderItem.product_id == Product.id)
         .outerjoin(Order, Order.id == OrderItem.order_id)
-        .filter(Order.status.in_(["paid", "shipped", "completed"]))
+        .where(Order.status.in_(["paid", "shipped", "completed"]))
         .group_by(Category.id, Category.name)
-        .all()
     )
+    
+    result = await db.execute(query)
+    categories = result.all()
 
     return success_response(
         [

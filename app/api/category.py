@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import List
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from database import get_db
 from models.product import Category
 from schemas.product import CategoryCreate, CategoryUpdate, CategoryResponse, ListResponse
@@ -9,10 +9,12 @@ from schemas.product import CategoryCreate, CategoryUpdate, CategoryResponse, Li
 router = APIRouter(prefix="/categories", tags=["分类管理"])
 
 
-@router.get("", response_model=ListResponse)
-def list_categories(db: Session = Depends(get_db)):
+@router.get("", response_model=ListResponse, operation_id="get_categories")
+async def list_categories(db: AsyncSession = Depends(get_db)):
     """获取所有分类列表"""
-    categories = db.query(Category).order_by(Category.sort_order, Category.id).all()
+    query = select(Category).order_by(Category.sort_order, Category.id)
+    result = await db.execute(query)
+    categories = result.scalars().all()
     return ListResponse(
         code=0,
         message="success",
@@ -21,29 +23,31 @@ def list_categories(db: Session = Depends(get_db)):
     )
 
 
-@router.get("/{category_id}", response_model=CategoryResponse)
-def get_category(category_id: int, db: Session = Depends(get_db)):
+@router.get("/{category_id}", response_model=CategoryResponse, operation_id="get_category_by_id")
+async def get_category(category_id: int, db: AsyncSession = Depends(get_db)):
     """获取单个分类详情"""
-    category = db.query(Category).filter(Category.id == category_id).first()
+    result = await db.execute(select(Category).where(Category.id == category_id))
+    category = result.scalar_one_or_none()
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
     return category
 
 
 @router.post("", response_model=CategoryResponse)
-def create_category(data: CategoryCreate, db: Session = Depends(get_db)):
+async def create_category(data: CategoryCreate, db: AsyncSession = Depends(get_db)):
     """创建分类"""
     category = Category(**data.model_dump())
     db.add(category)
-    db.commit()
-    db.refresh(category)
+    await db.commit()
+    await db.refresh(category)
     return category
 
 
 @router.put("/{category_id}", response_model=CategoryResponse)
-def update_category(category_id: int, data: CategoryUpdate, db: Session = Depends(get_db)):
+async def update_category(category_id: int, data: CategoryUpdate, db: AsyncSession = Depends(get_db)):
     """更新分类"""
-    category = db.query(Category).filter(Category.id == category_id).first()
+    result = await db.execute(select(Category).where(Category.id == category_id))
+    category = result.scalar_one_or_none()
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
     
@@ -51,18 +55,19 @@ def update_category(category_id: int, data: CategoryUpdate, db: Session = Depend
     for key, value in update_data.items():
         setattr(category, key, value)
     
-    db.commit()
-    db.refresh(category)
+    await db.commit()
+    await db.refresh(category)
     return category
 
 
 @router.delete("/{category_id}")
-def delete_category(category_id: int, db: Session = Depends(get_db)):
+async def delete_category(category_id: int, db: AsyncSession = Depends(get_db)):
     """删除分类"""
-    category = db.query(Category).filter(Category.id == category_id).first()
+    result = await db.execute(select(Category).where(Category.id == category_id))
+    category = result.scalar_one_or_none()
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
     
-    db.delete(category)
-    db.commit()
+    await db.delete(category)
+    await db.commit()
     return {"code": 0, "message": "删除成功"}

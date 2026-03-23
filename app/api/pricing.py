@@ -5,8 +5,8 @@ Pricing API - 价格计算接口
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, select
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel
@@ -32,10 +32,11 @@ def fail_response(code: int, message: str):
     return {"code": code, "message": message}
 
 
-@router.post("/calculate")
-def calculate_price(request: PriceCalculateRequest, db: Session = Depends(get_db)):
+@router.post("/calculate", operation_id="calculate_price")
+async def calculate_price(request: PriceCalculateRequest, db: AsyncSession = Depends(get_db)):
     """
     计算最终价格
+    支持会员折扣和优惠券叠加
     items: [{"product_id": 1, "quantity": 2}, ...]
     """
     if not request.items:
@@ -46,11 +47,10 @@ def calculate_price(request: PriceCalculateRequest, db: Session = Depends(get_db
     member_discount = 1.0
 
     if request.member_level and request.member_level != "normal":
-        member = (
-            db.query(MemberLevel)
-            .filter(MemberLevel.name == request.member_level)
-            .first()
+        member_result = await db.execute(
+            select(MemberLevel).where(MemberLevel.name == request.member_level)
         )
+        member = member_result.scalar_one_or_none()
         if member:
             member_discount = float(member.discount_rate)
 
@@ -58,7 +58,8 @@ def calculate_price(request: PriceCalculateRequest, db: Session = Depends(get_db
         product_id = item.get("product_id")
         quantity = item.get("quantity", 1)
 
-        product = db.query(Product).filter(Product.id == product_id).first()
+        product_result = await db.execute(select(Product).where(Product.id == product_id))
+        product = product_result.scalar_one_or_none()
         if not product:
             return fail_response(404, f"商品ID {product_id} 不存在")
 
@@ -84,11 +85,10 @@ def calculate_price(request: PriceCalculateRequest, db: Session = Depends(get_db
     coupon_info = None
 
     if request.coupon_code:
-        coupon = (
-            db.query(Coupon)
-            .filter(and_(Coupon.code == request.coupon_code, Coupon.status == 1))
-            .first()
+        coupon_result = await db.execute(
+            select(Coupon).where(and_(Coupon.code == request.coupon_code, Coupon.status == 1))
         )
+        coupon = coupon_result.scalar_one_or_none()
 
         if not coupon:
             return fail_response(404, "优惠券不存在或已禁用")
@@ -139,10 +139,11 @@ def calculate_price(request: PriceCalculateRequest, db: Session = Depends(get_db
     )
 
 
-@router.get("/coupons/{code}")
-def get_coupon_info(code: str, db: Session = Depends(get_db)):
+@router.get("/coupons/{code}", operation_id="get_coupon_info")
+async def get_coupon_info(code: str, db: AsyncSession = Depends(get_db)):
     """获取优惠券信息"""
-    coupon = db.query(Coupon).filter(Coupon.code == code).first()
+    result = await db.execute(select(Coupon).where(Coupon.code == code))
+    coupon = result.scalar_one_or_none()
     if not coupon:
         raise HTTPException(status_code=404, detail="优惠券不存在")
 
@@ -170,14 +171,15 @@ def get_coupon_info(code: str, db: Session = Depends(get_db)):
     return success_response(data)
 
 
-@router.post("/coupons/apply")
-def apply_coupon(
+@router.post("/coupons/apply", operation_id="apply_coupon")
+async def apply_coupon(
     code: str,
     order_amount: float = Query(..., description="订单金额"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """试算优惠券"""
-    coupon = db.query(Coupon).filter(Coupon.code == code).first()
+    result = await db.execute(select(Coupon).where(Coupon.code == code))
+    coupon = result.scalar_one_or_none()
     if not coupon:
         raise HTTPException(status_code=404, detail="优惠券不存在")
 
@@ -214,8 +216,9 @@ def apply_coupon(
     )
 
 
-@router.get("/member-levels")
-def list_member_levels(db: Session = Depends(get_db)):
-    """获取会员等级列表"""
-    levels = db.query(MemberLevel).filter().all()
+@router.get("/member-levels", operation_id="get_member_levels")
+async def list_member_levels(db: AsyncSession = Depends(get_db)):
+    """获取会员等级列表及其折扣率"""
+    result = await db.execute(select(MemberLevel))
+    levels = result.scalars().all()
     return success_response([level.to_dict() for level in levels])

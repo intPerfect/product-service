@@ -4,9 +4,9 @@ Inventory API - 库存管理接口
 提供库存预留、释放、检查等功能
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, select
 from datetime import datetime, timedelta
 from typing import Optional
 import uuid
@@ -26,15 +26,16 @@ def fail_response(code: int, message: str):
     return {"code": code, "message": message}
 
 
-@router.post("/reserve")
-def reserve_inventory(
+@router.post("/reserve", operation_id="reserve_inventory")
+async def reserve_inventory(
     product_id: int = Query(..., description="商品ID"),
     quantity: int = Query(..., ge=1, description="预留数量"),
     ttl_seconds: int = Query(300, ge=60, le=3600, description="预留有效期(秒)"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """预留库存"""
-    product = db.query(Product).filter(Product.id == product_id).first()
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
 
@@ -42,17 +43,19 @@ def reserve_inventory(
         raise HTTPException(status_code=400, detail="商品已下架")
 
     available_stock = product.stock
-    existing_reserves = (
-        db.query(InventoryReservation)
-        .filter(
+    reserve_query = (
+        select(InventoryReservation)
+        .where(
             and_(
                 InventoryReservation.product_id == product_id,
                 InventoryReservation.status == "active",
                 InventoryReservation.expires_at > datetime.now(),
             )
         )
-        .all()
     )
+    reserve_result = await db.execute(reserve_query)
+    existing_reserves = reserve_result.scalars().all()
+    
     for res in existing_reserves:
         available_stock -= res.quantity
 
@@ -70,8 +73,8 @@ def reserve_inventory(
         expires_at=expires_at,
     )
     db.add(reservation)
-    db.commit()
-    db.refresh(reservation)
+    await db.commit()
+    await db.refresh(reservation)
 
     return success_response(
         {
@@ -86,14 +89,13 @@ def reserve_inventory(
     )
 
 
-@router.delete("/reserve/{reservation_id}")
-def release_reservation(reservation_id: str, db: Session = Depends(get_db)):
+@router.delete("/reserve/{reservation_id}", operation_id="release_reservation")
+async def release_reservation(reservation_id: str, db: AsyncSession = Depends(get_db)):
     """释放库存预留"""
-    reservation = (
-        db.query(InventoryReservation)
-        .filter(InventoryReservation.reservation_id == reservation_id)
-        .first()
+    result = await db.execute(
+        select(InventoryReservation).where(InventoryReservation.reservation_id == reservation_id)
     )
+    reservation = result.scalar_one_or_none()
 
     if not reservation:
         raise HTTPException(status_code=404, detail="预留记录不存在")
@@ -104,21 +106,20 @@ def release_reservation(reservation_id: str, db: Session = Depends(get_db)):
         )
 
     reservation.status = "cancelled"
-    db.commit()
+    await db.commit()
 
     return success_response(
         {"reservation_id": reservation_id, "status": "cancelled"}, "预留已释放"
     )
 
 
-@router.post("/reserve/{reservation_id}/confirm")
-def confirm_reservation(reservation_id: str, db: Session = Depends(get_db)):
+@router.post("/reserve/{reservation_id}/confirm", operation_id="confirm_reservation")
+async def confirm_reservation(reservation_id: str, db: AsyncSession = Depends(get_db)):
     """确认预留（扣减实际库存）"""
-    reservation = (
-        db.query(InventoryReservation)
-        .filter(InventoryReservation.reservation_id == reservation_id)
-        .first()
+    result = await db.execute(
+        select(InventoryReservation).where(InventoryReservation.reservation_id == reservation_id)
     )
+    reservation = result.scalar_one_or_none()
 
     if not reservation:
         raise HTTPException(status_code=404, detail="预留记录不存在")
@@ -130,10 +131,11 @@ def confirm_reservation(reservation_id: str, db: Session = Depends(get_db)):
 
     if reservation.expires_at < datetime.now():
         reservation.status = "expired"
-        db.commit()
+        await db.commit()
         raise HTTPException(status_code=400, detail="预留已过期")
 
-    product = db.query(Product).filter(Product.id == reservation.product_id).first()
+    product_result = await db.execute(select(Product).where(Product.id == reservation.product_id))
+    product = product_result.scalar_one_or_none()
     if not product or product.stock < reservation.quantity:
         raise HTTPException(status_code=400, detail="库存不足，无法确认")
 
@@ -142,7 +144,7 @@ def confirm_reservation(reservation_id: str, db: Session = Depends(get_db)):
         product.status = 2
 
     reservation.status = "confirmed"
-    db.commit()
+    await db.commit()
 
     return success_response(
         {
@@ -156,24 +158,29 @@ def confirm_reservation(reservation_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/check/{product_id}")
-def check_inventory(product_id: int, db: Session = Depends(get_db)):
-    """检查库存状态"""
-    product = db.query(Product).filter(Product.id == product_id).first()
+@router.get("/check/{product_id}", operation_id="check_inventory")
+async def check_inventory(
+    product_id: int = Path(..., description="商品ID，要查询库存的商品编号"),
+    db: AsyncSession = Depends(get_db)
+):
+    """检查商品库存状态，返回总库存、预留数量、可用数量等信息"""
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
 
-    active_reservations = (
-        db.query(InventoryReservation)
-        .filter(
+    reserve_query = (
+        select(InventoryReservation)
+        .where(
             and_(
                 InventoryReservation.product_id == product_id,
                 InventoryReservation.status == "active",
                 InventoryReservation.expires_at > datetime.now(),
             )
         )
-        .all()
     )
+    reserve_result = await db.execute(reserve_query)
+    active_reservations = reserve_result.scalars().all()
 
     reserved_quantity = sum(r.quantity for r in active_reservations)
 
@@ -202,7 +209,7 @@ def check_inventory(product_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/batch")
-def batch_inventory_operation(operations: list, db: Session = Depends(get_db)):
+async def batch_inventory_operation(operations: list, db: AsyncSession = Depends(get_db)):
     """
     批量库存操作
     operations: [{"action": "reserve"|"release"|"confirm", "product_id": 1, "quantity": 1, "reservation_id": "xxx"}]
@@ -215,13 +222,13 @@ def batch_inventory_operation(operations: list, db: Session = Depends(get_db)):
         try:
             if action == "reserve":
                 quantity = op.get("quantity", 1)
-                result = reserve_inventory(product_id, quantity, 300, db)
+                result = await reserve_inventory(product_id, quantity, 300, db)
                 results.append(
                     {"action": action, "product_id": product_id, "result": result}
                 )
             elif action == "release":
                 reservation_id = op.get("reservation_id")
-                result = release_reservation(reservation_id, db)
+                result = await release_reservation(reservation_id, db)
                 results.append(
                     {
                         "action": action,
@@ -231,7 +238,7 @@ def batch_inventory_operation(operations: list, db: Session = Depends(get_db)):
                 )
             elif action == "confirm":
                 reservation_id = op.get("reservation_id")
-                result = confirm_reservation(reservation_id, db)
+                result = await confirm_reservation(reservation_id, db)
                 results.append(
                     {
                         "action": action,

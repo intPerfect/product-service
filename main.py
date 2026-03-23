@@ -4,20 +4,28 @@ Product Service - 商品服务
 用于MCP网关测试的商品增删改查服务
 """
 
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import CORS_ORIGINS, HOST, PORT
+logger = logging.getLogger(__name__)
+
+from config import settings
 from app.api import category, product, inventory, pricing, order, analytics, search
 
 app = FastAPI(
-    title="Product Service", description="商品服务 - MCP网关测试用", version="1.0.0"
+    title="Product Service",
+    description="商品服务 - 提供商品管理、库存管理、订单管理、价格计算等功能",
+    version="1.0.0",
+    openapi_url="/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
 # CORS配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,12 +42,12 @@ app.include_router(product.router, prefix="/api")
 
 
 @app.get("/")
-def root():
+async def root():
     return {"service": "Product Service", "version": "1.0.0", "status": "running"}
 
 
 @app.get("/health")
-def health_check():
+async def health_check():
     return {"status": "healthy"}
 
 
@@ -57,14 +65,14 @@ if __name__ == "__main__":
                 shell=True,
                 capture_output=True,
             )
-            print(f"Killed processes on port {port}")
+            logger.info(f"Killed processes on port {port}")
         except Exception as e:
-            print(f"Error killing port {port}: {e}")
+            logger.error(f"Error killing port {port}: {e}")
 
     # Kill any existing processes on the port and wait for OS to release it
-    kill_port(PORT)
+    kill_port(settings.server_port)
     time.sleep(2)
 
     import uvicorn
-    print(f"启动商品服务: http://{HOST}:{PORT}")
-    uvicorn.run(app, host=HOST, port=PORT, reload=False)
+    logger.info(f"启动商品服务: http://{settings.server_host}:{settings.server_port}")
+    uvicorn.run(app, host=settings.server_host, port=settings.server_port, reload=False)

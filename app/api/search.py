@@ -5,8 +5,8 @@ Search API - 商品搜索增强接口
 """
 
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import or_, and_, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import or_, and_, desc, func, select
 from typing import Optional, List
 
 from database import get_db
@@ -19,16 +19,17 @@ def success_response(data=None, message="success"):
     return {"code": 0, "message": message, "data": data}
 
 
-@router.post("/compare")
-def compare_products(product_ids: List[int], db: Session = Depends(get_db)):
-    """商品比价（批量查询）"""
+@router.post("/compare", operation_id="compare_products")
+async def compare_products(product_ids: List[int], db: AsyncSession = Depends(get_db)):
+    """商品比价，最多支持10个商品同时对比"""
     if not product_ids:
         return {"code": 400, "message": "商品ID列表不能为空"}
 
     if len(product_ids) > 10:
         return {"code": 400, "message": "最多支持10个商品对比"}
 
-    products = db.query(Product).filter(Product.id.in_(product_ids)).all()
+    result = await db.execute(select(Product).where(Product.id.in_(product_ids)))
+    products = result.scalars().all()
 
     if len(products) != len(product_ids):
         found_ids = {p.id for p in products}
@@ -37,9 +38,8 @@ def compare_products(product_ids: List[int], db: Session = Depends(get_db)):
 
     comparison = []
     for p in products:
-        category_name = (
-            db.query(Category.name).filter(Category.id == p.category_id).scalar()
-        )
+        cat_result = await db.execute(select(Category.name).where(Category.id == p.category_id))
+        category_name = cat_result.scalar()
         comparison.append(
             {
                 "product_id": p.id,
@@ -67,17 +67,17 @@ def compare_products(product_ids: List[int], db: Session = Depends(get_db)):
     )
 
 
-@router.get("/trending")
-def get_trending_products(
+@router.get("/trending", operation_id="get_trending_products")
+async def get_trending_products(
     category_id: Optional[int] = Query(None, description="分类ID"),
     limit: int = Query(10, ge=1, le=50, description="返回数量"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """热销商品榜单"""
     from models.order import OrderItem, Order
 
     query = (
-        db.query(
+        select(
             Product.id,
             Product.name,
             Product.price,
@@ -89,13 +89,13 @@ def get_trending_products(
         .outerjoin(OrderItem, OrderItem.product_id == Product.id)
         .outerjoin(Order, Order.id == OrderItem.order_id)
         .outerjoin(Category, Category.id == Product.category_id)
-        .filter(Product.status == 1)
+        .where(Product.status == 1)
     )
 
     if category_id:
-        query = query.filter(Product.category_id == category_id)
+        query = query.where(Product.category_id == category_id)
 
-    products = (
+    query = (
         query.group_by(
             Product.id,
             Product.name,
@@ -106,8 +106,10 @@ def get_trending_products(
         )
         .order_by(desc("sales_count"))
         .limit(limit)
-        .all()
     )
+
+    result = await db.execute(query)
+    products = result.all()
 
     trending = []
     for i, p in enumerate(products):
@@ -129,20 +131,21 @@ def get_trending_products(
     return success_response(trending)
 
 
-@router.get("/{product_id}/alternatives")
-def get_alternatives(
+@router.get("/{product_id}/alternatives", operation_id="get_alternatives")
+async def get_alternatives(
     product_id: int,
     limit: int = Query(5, ge=1, le=20, description="返回数量"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """替代商品推荐（同分类或相似价格）"""
-    product = db.query(Product).filter(Product.id == product_id).first()
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
 
-    alternatives = (
-        db.query(Product)
-        .filter(
+    query = (
+        select(Product)
+        .where(
             Product.id != product_id,
             Product.status == 1,
             Product.stock > 0,
@@ -156,16 +159,17 @@ def get_alternatives(
         )
         .order_by(desc(Product.stock))
         .limit(limit)
-        .all()
     )
+    
+    result = await db.execute(query)
+    alternatives = result.scalars().all()
 
-    result = []
+    result_list = []
     for alt in alternatives:
-        category_name = (
-            db.query(Category.name).filter(Category.id == alt.category_id).scalar()
-        )
+        cat_result = await db.execute(select(Category.name).where(Category.id == alt.category_id))
+        category_name = cat_result.scalar()
         price_diff = float(alt.price) - float(product.price)
-        result.append(
+        result_list.append(
             {
                 "product_id": alt.id,
                 "name": alt.name,
@@ -184,7 +188,7 @@ def get_alternatives(
             }
         )
 
-    result.sort(key=lambda x: abs(x["price_diff"]))
+    result_list.sort(key=lambda x: abs(x["price_diff"]))
 
     return success_response(
         {
@@ -194,13 +198,13 @@ def get_alternatives(
                 "price": float(product.price),
                 "category_id": product.category_id,
             },
-            "alternatives": result,
+            "alternatives": result_list,
         }
     )
 
 
-@router.get("/search/advanced")
-def advanced_search(
+@router.get("/search/advanced", operation_id="search_products")
+async def advanced_search(
     keyword: Optional[str] = Query(None, description="关键词"),
     category_id: Optional[int] = Query(None, description="分类ID"),
     min_price: Optional[float] = Query(None, description="最低价"),
@@ -211,13 +215,13 @@ def advanced_search(
     ),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """高级搜索"""
-    query = db.query(Product).filter(Product.status == 1)
+    query = select(Product).where(Product.status == 1)
 
     if keyword:
-        query = query.filter(
+        query = query.where(
             or_(
                 Product.name.like(f"%{keyword}%"),
                 Product.sku.like(f"%{keyword}%"),
@@ -226,16 +230,16 @@ def advanced_search(
         )
 
     if category_id:
-        query = query.filter(Product.category_id == category_id)
+        query = query.where(Product.category_id == category_id)
 
     if min_price is not None:
-        query = query.filter(Product.price >= min_price)
+        query = query.where(Product.price >= min_price)
 
     if max_price is not None:
-        query = query.filter(Product.price <= max_price)
+        query = query.where(Product.price <= max_price)
 
     if in_stock_only:
-        query = query.filter(Product.stock > 0)
+        query = query.where(Product.stock > 0)
 
     if sort_by == "price_asc":
         query = query.order_by(Product.price.asc())
@@ -246,8 +250,15 @@ def advanced_search(
     else:
         query = query.order_by(Product.id.desc())
 
-    total = query.count()
-    products = query.offset((page - 1) * page_size).limit(page_size).all()
+    # Count total
+    count_query = select(func.count()).select_from(query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+
+    # Get paginated results
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    products = result.scalars().all()
 
     return success_response(
         {
@@ -257,6 +268,3 @@ def advanced_search(
             "products": [p.to_dict() for p in products],
         }
     )
-
-
-from sqlalchemy import func
