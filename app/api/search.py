@@ -7,6 +7,7 @@ Search API - 商品搜索增强接口
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_, and_, desc, func, select
+from sqlalchemy.orm import joinedload
 from typing import Optional, List
 
 from database import get_db
@@ -38,7 +39,9 @@ async def compare_products(product_ids: List[int], db: AsyncSession = Depends(ge
 
     comparison = []
     for p in products:
-        cat_result = await db.execute(select(Category.name).where(Category.id == p.category_id))
+        cat_result = await db.execute(
+            select(Category.name).where(Category.id == p.category_id)
+        )
         category_name = cat_result.scalar()
         comparison.append(
             {
@@ -160,13 +163,15 @@ async def get_alternatives(
         .order_by(desc(Product.stock))
         .limit(limit)
     )
-    
+
     result = await db.execute(query)
     alternatives = result.scalars().all()
 
     result_list = []
     for alt in alternatives:
-        cat_result = await db.execute(select(Category.name).where(Category.id == alt.category_id))
+        cat_result = await db.execute(
+            select(Category.name).where(Category.id == alt.category_id)
+        )
         category_name = cat_result.scalar()
         price_diff = float(alt.price) - float(product.price)
         result_list.append(
@@ -218,7 +223,9 @@ async def advanced_search(
     db: AsyncSession = Depends(get_db),
 ):
     """高级搜索"""
-    query = select(Product).where(Product.status == 1)
+    query = (
+        select(Product).options(joinedload(Product.category)).where(Product.status == 1)
+    )
 
     if keyword:
         query = query.where(
