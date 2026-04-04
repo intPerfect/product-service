@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_, and_, desc, func, select
 from sqlalchemy.orm import joinedload
 from typing import Optional, List
+from pydantic import BaseModel
 
 from database import get_db
 from models.product import Product, Category
@@ -16,12 +17,17 @@ from models.product import Product, Category
 router = APIRouter(prefix="/products", tags=["商品搜索"])
 
 
+class CompareRequest(BaseModel):
+    product_ids: List[int]
+
+
 def success_response(data=None, message="success"):
     return {"code": 0, "message": message, "data": data}
 
 
 @router.post("/compare", operation_id="compare_products")
-async def compare_products(product_ids: List[int], db: AsyncSession = Depends(get_db)):
+async def compare_products(request: CompareRequest, db: AsyncSession = Depends(get_db)):
+    product_ids = request.product_ids
     """商品比价，最多支持10个商品同时对比"""
     if not product_ids:
         return {"code": 400, "message": "商品ID列表不能为空"}

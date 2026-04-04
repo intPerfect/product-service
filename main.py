@@ -19,7 +19,7 @@ app = FastAPI(
     version="1.0.0",
     openapi_url="/openapi.json",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
 )
 
 # CORS配置
@@ -52,27 +52,18 @@ async def health_check():
 
 
 if __name__ == "__main__":
-    import subprocess
-    import time
-
-    def kill_port(port):
-        """Kill all processes using the specified port via PowerShell"""
-        try:
-            subprocess.run(
-                f'powershell -Command "'
-                f'Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue '
-                f'| ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}"',
-                shell=True,
-                capture_output=True,
-            )
-            logger.info(f"Killed processes on port {port}")
-        except Exception as e:
-            logger.error(f"Error killing port {port}: {e}")
-
-    # Kill any existing processes on the port and wait for OS to release it
-    kill_port(settings.server_port)
-    time.sleep(2)
-
+    import os
     import uvicorn
-    logger.info(f"启动商品服务: http://{settings.server_host}:{settings.server_port}")
-    uvicorn.run(app, host=settings.server_host, port=settings.server_port, reload=False)
+
+    reload = os.getenv("RELOAD", "true").lower() in ("true", "1", "yes")
+
+    logger.info(
+        f"启动商品服务: http://{settings.server_host}:{settings.server_port} (热更新: {reload})"
+    )
+    uvicorn.run(
+        "main:app",
+        host=settings.server_host,
+        port=settings.server_port,
+        reload=reload,
+        reload_dirs=["app"] if reload else None,
+    )

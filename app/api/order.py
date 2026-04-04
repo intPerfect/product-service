@@ -54,7 +54,9 @@ async def create_order(request: OrderCreateRequest, db: AsyncSession = Depends(g
         quantity = item.get("quantity", 1)
         reservation_id = item.get("reservation_id")
 
-        product_result = await db.execute(select(Product).where(Product.id == product_id))
+        product_result = await db.execute(
+            select(Product).where(Product.id == product_id)
+        )
         product = product_result.scalar_one_or_none()
         if not product:
             return fail_response(404, f"商品ID {product_id} 不存在")
@@ -63,7 +65,9 @@ async def create_order(request: OrderCreateRequest, db: AsyncSession = Depends(g
 
         if reservation_id:
             res_result = await db.execute(
-                select(InventoryReservation).where(InventoryReservation.reservation_id == reservation_id)
+                select(InventoryReservation).where(
+                    InventoryReservation.reservation_id == reservation_id
+                )
             )
             reservation = res_result.scalar_one_or_none()
             if not reservation:
@@ -87,19 +91,16 @@ async def create_order(request: OrderCreateRequest, db: AsyncSession = Depends(g
             confirmed_reservations.append(reservation_id)
 
         available_stock = product.stock
-        active_reserves_query = (
-            select(InventoryReservation)
-            .where(
-                and_(
-                    InventoryReservation.product_id == product_id,
-                    InventoryReservation.status == "active",
-                    InventoryReservation.expires_at > datetime.now(),
-                )
+        active_reserves_query = select(InventoryReservation).where(
+            and_(
+                InventoryReservation.product_id == product_id,
+                InventoryReservation.status == "active",
+                InventoryReservation.expires_at > datetime.now(),
             )
         )
         active_reserves_result = await db.execute(active_reserves_query)
         active_reserves = active_reserves_result.scalars().all()
-        
+
         for res in active_reserves:
             if res.reservation_id not in confirmed_reservations:
                 available_stock -= res.quantity
@@ -154,12 +155,16 @@ async def create_order(request: OrderCreateRequest, db: AsyncSession = Depends(g
 
     for res_id in confirmed_reservations:
         res_result = await db.execute(
-            select(InventoryReservation).where(InventoryReservation.reservation_id == res_id)
+            select(InventoryReservation).where(
+                InventoryReservation.reservation_id == res_id
+            )
         )
         reservation = res_result.scalar_one_or_none()
         if reservation:
             reservation.status = "confirmed"
-            product_result = await db.execute(select(Product).where(Product.id == reservation.product_id))
+            product_result = await db.execute(
+                select(Product).where(Product.id == reservation.product_id)
+            )
             product = product_result.scalar_one_or_none()
             if product:
                 product.stock -= reservation.quantity
@@ -202,7 +207,11 @@ async def list_orders(
     total = total_result.scalar()
 
     # Get paginated results
-    query = query.order_by(Order.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    query = (
+        query.order_by(Order.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
     result = await db.execute(query)
     orders = result.scalars().all()
 
@@ -219,12 +228,14 @@ async def list_orders(
 @router.get("/{order_no}", operation_id="get_order")
 async def get_order(
     order_no: str = Path(..., description="订单编号，如 ORD2026032200001"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """获取订单详情，包含订单基本信息和商品明细"""
     # 预加载 items 关系
     result = await db.execute(
-        select(Order).options(selectinload(Order.items)).where(Order.order_no == order_no)
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.order_no == order_no)
     )
     order = result.scalar_one_or_none()
     if not order:
@@ -235,7 +246,9 @@ async def get_order(
 @router.post("/{order_no}/pay", operation_id="pay_order")
 async def pay_order(
     order_no: str = Path(..., description="要支付的订单编号"),
-    payment_method: str = Query(..., description="支付方式: alipay(支付宝)/wechat(微信)/bank(银行卡)"),
+    payment_method: str = Query(
+        ..., description="支付方式: alipay(支付宝)/wechat(微信)/bank(银行卡)"
+    ),
     db: AsyncSession = Depends(get_db),
 ):
     """模拟支付订单，将订单状态从pending变为paid"""
@@ -251,6 +264,7 @@ async def pay_order(
     order.payment_method = payment_method
     order.payment_time = datetime.now()
     await db.commit()
+    await db.refresh(order)
 
     return success_response(order.to_dict(include_items=False), "支付成功")
 
@@ -275,17 +289,23 @@ async def cancel_order(
         order.remark = (order.remark or "") + f" [取消原因: {reason}]"
 
     if order.status == "paid":
-        items_result = await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))
+        items_result = await db.execute(
+            select(OrderItem).where(OrderItem.order_id == order.id)
+        )
         items = items_result.scalars().all()
         for item in items:
             if item.reservation_id:
                 res_result = await db.execute(
-                    select(InventoryReservation).where(InventoryReservation.reservation_id == item.reservation_id)
+                    select(InventoryReservation).where(
+                        InventoryReservation.reservation_id == item.reservation_id
+                    )
                 )
                 reservation = res_result.scalar_one_or_none()
                 if reservation:
                     reservation.status = "cancelled"
-            product_result = await db.execute(select(Product).where(Product.id == item.product_id))
+            product_result = await db.execute(
+                select(Product).where(Product.id == item.product_id)
+            )
             product = product_result.scalar_one_or_none()
             if product:
                 product.stock += item.quantity
@@ -316,10 +336,14 @@ async def refund_order(
     if reason:
         order.remark = (order.remark or "") + f" [退款原因: {reason}]"
 
-    items_result = await db.execute(select(OrderItem).where(OrderItem.order_id == order.id))
+    items_result = await db.execute(
+        select(OrderItem).where(OrderItem.order_id == order.id)
+    )
     items = items_result.scalars().all()
     for item in items:
-        product_result = await db.execute(select(Product).where(Product.id == item.product_id))
+        product_result = await db.execute(
+            select(Product).where(Product.id == item.product_id)
+        )
         product = product_result.scalar_one_or_none()
         if product:
             product.stock += item.quantity
@@ -360,4 +384,6 @@ async def update_order_status(
 
     await db.commit()
 
-    return success_response(order.to_dict(include_items=False), f"订单状态已更新为: {status}")
+    return success_response(
+        order.to_dict(include_items=False), f"订单状态已更新为: {status}"
+    )

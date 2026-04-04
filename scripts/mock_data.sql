@@ -1,140 +1,12 @@
-# -*- coding: utf-8 -*-
+-- -*- coding: utf-8 -*-
 -- Product Service Mock Data
--- MySQL 8.0+
+-- 商品服务测试数据
+-- 执行顺序：先执行 init_db.sql 创建表结构，再执行本文件填充测试数据
 
--- 使用商品数据库
-USE product_db;
-
--- ============================================
--- 1. 清理并重建表结构
--- ============================================
-
--- 先删除外键约束的表
-DROP TABLE IF EXISTS `order_items`;
-DROP TABLE IF EXISTS `orders`;
-DROP TABLE IF EXISTS `inventory_reservation`;
-DROP TABLE IF EXISTS `product`;
-DROP TABLE IF EXISTS `category`;
-DROP TABLE IF EXISTS `coupons`;
-DROP TABLE IF EXISTS `member_levels`;
-
--- 创建商品分类表
-CREATE TABLE `category` (
-    `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
-    `name` VARCHAR(100) NOT NULL COMMENT '分类名称',
-    `description` VARCHAR(500) DEFAULT NULL COMMENT '分类描述',
-    `parent_id` BIGINT DEFAULT NULL COMMENT '父分类ID',
-    `sort_order` INT DEFAULT 0 COMMENT '排序',
-    `status` TINYINT DEFAULT 1 COMMENT '状态: 0-禁用 1-启用',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX `idx_parent_id` (`parent_id`),
-    INDEX `idx_status` (`status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商品分类表';
-
--- 创建商品表
-CREATE TABLE `product` (
-    `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
-    `sku` VARCHAR(64) NOT NULL UNIQUE COMMENT '商品SKU',
-    `name` VARCHAR(200) NOT NULL COMMENT '商品名称',
-    `description` TEXT DEFAULT NULL COMMENT '商品描述',
-    `price` DECIMAL(10, 2) NOT NULL DEFAULT 0.00 COMMENT '商品价格',
-    `cost` DECIMAL(10, 2) DEFAULT 0.00 COMMENT '成本价',
-    `category_id` BIGINT DEFAULT NULL COMMENT '分类ID',
-    `stock` INT NOT NULL DEFAULT 0 COMMENT '库存数量',
-    `status` TINYINT DEFAULT 1 COMMENT '状态: 0-下架 1-上架 2-售罄',
-    `image_url` VARCHAR(500) DEFAULT NULL COMMENT '商品图片',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX `idx_category_id` (`category_id`),
-    INDEX `idx_status` (`status`),
-    INDEX `idx_sku` (`sku`),
-    FOREIGN KEY (`category_id`) REFERENCES `category`(`id`) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商品表';
-
--- 创建会员等级表
-CREATE TABLE `member_levels` (
-    `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
-    `name` VARCHAR(32) UNIQUE NOT NULL COMMENT '等级名称',
-    `discount_rate` DECIMAL(5, 2) NOT NULL DEFAULT 1.00 COMMENT '折扣率(0.95表示95折)',
-    `points_multiplier` INT DEFAULT 1 COMMENT '积分倍数',
-    `description` VARCHAR(200) DEFAULT NULL COMMENT '等级描述',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='会员等级表';
-
--- 创建优惠券表
-CREATE TABLE `coupons` (
-    `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
-    `code` VARCHAR(32) UNIQUE NOT NULL COMMENT '优惠券代码',
-    `name` VARCHAR(100) NOT NULL COMMENT '优惠券名称',
-    `discount_type` VARCHAR(20) NOT NULL COMMENT '折扣类型: fixed-立减, percent-百分比',
-    `discount_value` DECIMAL(10, 2) NOT NULL COMMENT '折扣值',
-    `min_purchase` DECIMAL(10, 2) DEFAULT 0.00 COMMENT '最低消费金额',
-    `max_discount` DECIMAL(10, 2) DEFAULT NULL COMMENT '最大折扣金额',
-    `valid_from` DATETIME DEFAULT NULL COMMENT '生效时间',
-    `valid_until` DATETIME DEFAULT NULL COMMENT '失效时间',
-    `usage_limit` INT DEFAULT 100 COMMENT '使用次数限制',
-    `used_count` INT DEFAULT 0 COMMENT '已使用次数',
-    `status` SMALLINT DEFAULT 1 COMMENT '状态: 0-禁用 1-启用',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='优惠券表';
-
--- 创建库存预留表
-CREATE TABLE `inventory_reservation` (
-    `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
-    `reservation_id` VARCHAR(64) UNIQUE NOT NULL COMMENT '预留ID',
-    `product_id` BIGINT NOT NULL COMMENT '商品ID',
-    `quantity` INT NOT NULL DEFAULT 1 COMMENT '预留数量',
-    `status` VARCHAR(20) DEFAULT 'active' COMMENT '状态: active-有效, confirmed-已确认, cancelled-已取消, expired-已过期',
-    `expires_at` DATETIME NOT NULL COMMENT '过期时间',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX `idx_product_id` (`product_id`),
-    INDEX `idx_reservation_id` (`reservation_id`),
-    INDEX `idx_status` (`status`),
-    FOREIGN KEY (`product_id`) REFERENCES `product`(`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='库存预留表';
-
--- 创建订单表
-CREATE TABLE `orders` (
-    `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
-    `order_no` VARCHAR(64) UNIQUE NOT NULL COMMENT '订单编号',
-    `status` VARCHAR(20) DEFAULT 'pending' COMMENT '订单状态: pending-待支付, paid-已支付, shipped-已发货, completed-已完成, cancelled-已取消, refunded-已退款',
-    `total_amount` DECIMAL(12, 2) NOT NULL DEFAULT 0.00 COMMENT '订单总额',
-    `discount_amount` DECIMAL(12, 2) DEFAULT 0.00 COMMENT '折扣金额',
-    `payment_method` VARCHAR(32) DEFAULT NULL COMMENT '支付方式',
-    `payment_time` DATETIME DEFAULT NULL COMMENT '支付时间',
-    `customer_name` VARCHAR(100) DEFAULT NULL COMMENT '客户姓名',
-    `customer_phone` VARCHAR(20) DEFAULT NULL COMMENT '客户电话',
-    `shipping_address` TEXT DEFAULT NULL COMMENT '收货地址',
-    `remark` VARCHAR(500) DEFAULT NULL COMMENT '备注',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX `idx_order_no` (`order_no`),
-    INDEX `idx_status` (`status`),
-    INDEX `idx_customer_phone` (`customer_phone`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单表';
-
--- 创建订单明细表
-CREATE TABLE `order_items` (
-    `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
-    `order_id` BIGINT NOT NULL COMMENT '订单ID',
-    `product_id` BIGINT NOT NULL COMMENT '商品ID',
-    `sku` VARCHAR(64) NOT NULL COMMENT '商品SKU',
-    `product_name` VARCHAR(200) NOT NULL COMMENT '商品名称',
-    `price` DECIMAL(10, 2) NOT NULL COMMENT '商品单价',
-    `quantity` INT NOT NULL DEFAULT 1 COMMENT '购买数量',
-    `subtotal` DECIMAL(12, 2) NOT NULL COMMENT '小计金额',
-    `reservation_id` VARCHAR(64) DEFAULT NULL COMMENT '库存预留ID',
-    `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
-    INDEX `idx_order_id` (`order_id`),
-    INDEX `idx_product_id` (`product_id`),
-    FOREIGN KEY (`order_id`) REFERENCES `orders`(`id`) ON DELETE CASCADE,
-    FOREIGN KEY (`product_id`) REFERENCES `product`(`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='订单明细表';
+USE `product_db`;
 
 -- ============================================
--- 2. 插入商品分类数据
+-- 1. 商品分类数据
 -- ============================================
 
 -- 一级分类
@@ -181,7 +53,7 @@ INSERT INTO `category` (`name`, `description`, `parent_id`, `sort_order`, `statu
 ('香水', '各类香水', 5, 3, 1);
 
 -- ============================================
--- 3. 插入商品数据
+-- 2. 商品数据
 -- ============================================
 
 -- 手机通讯类商品 (category_id = 6)
@@ -300,6 +172,12 @@ INSERT INTO `product` (`sku`, `name`, `description`, `price`, `cost`, `category_
 ('MAKEUP-005', '兰蔻持妆粉底液', '轻薄持妆，多色可选，30ml', 480.00, 250.00, 24, 280, 1),
 ('MAKEUP-006', '完美日记眼影盘', '动物眼影盘，多款可选', 99.00, 35.00, 24, 800, 1);
 
+-- 中价位笔记本追加（必须插在所有商品末尾，防止破坏已有 product_id 的引用）
+-- 新ID：LAPTOP-009=84, LAPTOP-010=85，不影响 order_items 中已有的 1-83 号商品引用
+INSERT INTO `product` (`sku`, `name`, `description`, `price`, `cost`, `category_id`, `stock`, `status`) VALUES
+('LAPTOP-009', '华硕 VivoBook Pro 16 OLED 2024', 'AMD Ryzen 9 7945HX，32GB内存，1TB SSD，2.5K OLED创意屏，高性价比笔记本电脑创作本', 7499.00, 5800.00, 7, 120, 1),
+('LAPTOP-010', '联想 ThinkBook 16 2024', 'Intel Core Ultra 7-155H，16GB内存，512GB SSD，2K屏，轻薄商务笔记本电脑', 6999.00, 5200.00, 7, 150, 1);
+
 -- ============================================
 -- 4. 插入会员等级数据
 -- ============================================
@@ -339,9 +217,9 @@ INSERT INTO `coupons` (`code`, `name`, `discount_type`, `discount_value`, `min_p
 
 INSERT INTO `orders` (`order_no`, `status`, `total_amount`, `discount_amount`, `payment_method`, `payment_time`, `customer_name`, `customer_phone`, `shipping_address`, `remark`, `created_at`) VALUES
 ('ORD2026032000001', 'completed', 8999.00, 0.00, 'alipay', '2026-03-20 10:30:00', '张三', '13800138001', '北京市朝阳区建国路88号', '请尽快发货', '2026-03-20 10:15:00'),
-('ORD2026032000002', 'paid', 18298.00, 100.00, 'wechat', '2026-03-20 11:20:00', '李四', '13800138002', '上海市浦东新区陆家嘴环路100号', NULL, '2026-03-20 11:05:00'),
+('ORD2026032000002', 'paid', 18297.00, 100.00, 'wechat', '2026-03-20 11:20:00', '李四', '13800138002', '上海市浦东新区陆家嘴环路100号', NULL, '2026-03-20 11:05:00'),
 ('ORD2026032000003', 'shipped', 8498.00, 0.00, 'alipay', '2026-03-20 14:00:00', '王五', '13800138003', '广州市天河区天河路385号', '送货前请电话联系', '2026-03-20 13:45:00'),
-('ORD2026032000004', 'pending', 1683.00, 0.00, NULL, NULL, '赵六', '13800138004', '深圳市南山区科技园南区', NULL, '2026-03-20 15:30:00'),
+('ORD2026032000004', 'pending', 1682.00, 0.00, NULL, NULL, '赵六', '13800138004', '深圳市南山区科技园南区', NULL, '2026-03-20 15:30:00'),
 ('ORD2026032000005', 'completed', 486.00, 48.60, 'wechat', '2026-03-20 16:00:00', '孙七', '13800138005', '杭州市西湖区文三路199号', '周末配送', '2026-03-20 15:50:00'),
 ('ORD2026032100001', 'completed', 14999.00, 1499.90, 'alipay', '2026-03-21 09:30:00', '周八', '13800138006', '成都市武侯区天府大道999号', NULL, '2026-03-21 09:15:00'),
 ('ORD2026032100002', 'paid', 2980.00, 0.00, 'bank', '2026-03-21 10:45:00', '吴九', '13800138007', '南京市鼓楼区中山路1号', '开票', '2026-03-21 10:30:00'),
@@ -350,35 +228,37 @@ INSERT INTO `orders` (`order_no`, `status`, `total_amount`, `discount_amount`, `
 ('ORD2026032200002', 'paid', 10499.00, 1049.90, 'wechat', '2026-03-22 10:30:00', 'VIP客户', '13900139002', '重庆市渝中区解放碑', 'VIP客户优先处理', '2026-03-22 10:15:00');
 
 -- 插入订单明细
+-- 商品ID对照：手机1-8, 笔记本9-16, 数码配件17-27(AUDIO-001=17..AUDIO-008=24,CHARGE-001=25..003=27)
+-- 智能设备28-32, 男装33-39, 女装40-47, 茶叶48-57, 零食58-65, 厨房66-71, 护肤72-77, 彩妆78-83
 INSERT INTO `order_items` (`order_id`, `product_id`, `sku`, `product_name`, `price`, `quantity`, `subtotal`) VALUES
 -- 订单1: 张三买iPhone 15 Pro (8999)
 (1, 1, 'PHONE-001', 'iPhone 15 Pro 256GB', 8999.00, 1, 8999.00),
 -- 订单2: 李四买iPhone + AirPods (11999 + 1899 + 4399 = 18297)
 (2, 2, 'PHONE-002', 'iPhone 15 Pro Max 512GB', 11999.00, 1, 11999.00),
-(2, 9, 'AUDIO-001', 'AirPods Pro 第二代', 1899.00, 1, 1899.00),
-(2, 10, 'AUDIO-002', 'AirPods Max', 4399.00, 1, 4399.00),
+(2, 17, 'AUDIO-001', 'AirPods Pro 第二代', 1899.00, 1, 1899.00),
+(2, 18, 'AUDIO-002', 'AirPods Max', 4399.00, 1, 4399.00),
 -- 订单3: 王五买华为手机+耳机 (6999 + 1499 = 8498)
 (3, 3, 'PHONE-003', '华为 Mate 60 Pro 512GB', 6999.00, 1, 6999.00),
-(3, 11, 'AUDIO-003', '华为 FreeBuds Pro 3', 1499.00, 1, 1499.00),
--- 订单4: 赵六买服装+茶叶 (129*3 + 399 + 359*2 + 89*2 = 1683)
-(4, 17, 'MCLOTH-001', '男士纯棉圆领T恤', 129.00, 3, 387.00),
-(4, 19, 'MCLOTH-003', '男士牛仔裤', 399.00, 1, 399.00),
-(4, 24, 'WCLOTH-002', '女士碎花连衣裙', 359.00, 2, 718.00),
-(4, 33, 'TEA-001', '武夷山正山小种红茶', 89.00, 2, 178.00),
+(3, 19, 'AUDIO-003', '华为 FreeBuds Pro 3', 1499.00, 1, 1499.00),
+-- 订单4: 赵六买服装+茶叶 (129*3 + 399 + 359*2 + 89*2 = 387+399+718+178 = 1682)
+(4, 33, 'MCLOTH-001', '男士纯棉圆领T恤', 129.00, 3, 387.00),
+(4, 35, 'MCLOTH-003', '男士牛仔裤', 399.00, 1, 399.00),
+(4, 41, 'WCLOTH-002', '女士碎花连衣裙', 359.00, 2, 718.00),
+(4, 48, 'TEA-001', '武夷山正山小种红茶', 89.00, 2, 178.00),
 -- 订单5: 孙七买茶叶零食 (89 + 198 + 199 = 486)
-(5, 33, 'TEA-001', '武夷山正山小种红茶', 89.00, 1, 89.00),
-(5, 35, 'TEA-003', '安吉白茶', 198.00, 1, 198.00),
-(5, 41, 'SNACK-001', '比利时手工巧克力', 199.00, 1, 199.00),
+(5, 48, 'TEA-001', '武夷山正山小种红茶', 89.00, 1, 89.00),
+(5, 50, 'TEA-003', '安吉白茶', 198.00, 1, 198.00),
+(5, 58, 'SNACK-001', '比利时手工巧克力', 199.00, 1, 199.00),
 -- 订单6: 周八买MacBook (14999)
 (6, 9, 'LAPTOP-001', 'MacBook Pro 14寸 M3 Pro', 14999.00, 1, 14999.00),
 -- 订单7: 吴九买护肤品 (950*2 + 1080 = 2980)
-(7, 47, 'SKIN-002', '雅诗兰黛小棕瓶', 950.00, 2, 1900.00),
-(7, 48, 'SKIN-003', '兰蔻小黑瓶', 1080.00, 1, 1080.00),
--- 订单8: 郑十(已取消)买厨房用品 (499 + 1299 = 1798)
-(8, 68, 'KITCHEN-001', '德国WMF不锈钢锅具套装', 3999.00, 1, 3999.00),
+(7, 73, 'SKIN-002', '雅诗兰黛小棕瓶', 950.00, 2, 1900.00),
+(7, 74, 'SKIN-003', '兰蔻小黑瓶', 1080.00, 1, 1080.00),
+-- 订单8: 郑十(已取消)买厨房用品 (3999)
+(8, 66, 'KITCHEN-001', '德国WMF不锈钢锅具套装', 3999.00, 1, 3999.00),
 -- 订单9: 测试用户买手机+手表 (4999 + 6499 = 11498)
 (9, 5, 'PHONE-005', '小米14 Pro 256GB', 4999.00, 1, 4999.00),
-(9, 14, 'AUDIO-006', 'Apple Watch Ultra 2', 6499.00, 1, 6499.00),
+(9, 22, 'AUDIO-006', 'Apple Watch Ultra 2', 6499.00, 1, 6499.00),
 -- 订单10: VIP客户买电脑 (10499)
 (10, 11, 'LAPTOP-003', 'MacBook Air 15寸 M3', 10499.00, 1, 10499.00);
 
@@ -398,6 +278,8 @@ INSERT INTO `inventory_reservation` (`reservation_id`, `product_id`, `quantity`,
 -- ============================================
 SELECT 'Mock data initialization completed!' AS message;
 SELECT COUNT(*) AS total_products FROM product;
+-- 验证：笔记本电脑分类应有10款（原8款 + 新增2款）
+SELECT COUNT(*) AS laptop_count FROM product WHERE category_id = 7;
 SELECT COUNT(*) AS total_categories FROM category;
 SELECT COUNT(*) AS total_orders FROM orders;
 SELECT COUNT(*) AS total_coupons FROM coupons;
